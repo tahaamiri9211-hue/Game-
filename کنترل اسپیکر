@@ -1,0 +1,226 @@
+# main.py - Bluetooth Music Controller (Touch UI)
+# Controls phone's media playback (works with Bluetooth speakers via AVRCP)
+
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.core.window import Window
+from kivy.graphics import Color, RoundedRectangle
+from kivy.metrics import dp
+
+# ===== Android Media Key classes =====
+from jnius import autoclass, cast
+
+PythonActivity = autoclass('org.kivy.android.PythonActivity')
+Context        = autoclass('android.content.Context')
+KeyEvent       = autoclass('android.view.KeyEvent')
+AudioManager   = autoclass('android.media.AudioManager')
+
+
+class MediaController:
+    """Dispatch media key events to Android system (controls active player)"""
+
+    def __init__(self):
+        activity = PythonActivity.mActivity
+        self.audio_manager = cast(
+            'android.media.AudioManager',
+            activity.getSystemService(Context.AUDIO_SERVICE)
+        )
+
+    def _send_key(self, keycode):
+        """Send a KEYCODE with DOWN + UP events"""
+        down = KeyEvent(KeyEvent.ACTION_DOWN, keycode)
+        up   = KeyEvent(KeyEvent.ACTION_UP, keycode)
+        self.audio_manager.dispatchMediaKeyEvent(down)
+        self.audio_manager.dispatchMediaKeyEvent(up)
+
+    def play_pause(self):
+        self._send_key(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+
+    def next_track(self):
+        self._send_key(KeyEvent.KEYCODE_MEDIA_NEXT)
+
+    def prev_track(self):
+        self._send_key(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+
+    def stop(self):
+        self._send_key(KeyEvent.KEYCODE_MEDIA_STOP)
+
+    def volume_up(self):
+        self.audio_manager.adjustStreamVolume(
+            AudioManager.STREAM_MUSIC,
+            AudioManager.ADJUST_RAISE,
+            AudioManager.FLAG_SHOW_UI
+        )
+
+    def volume_down(self):
+        self.audio_manager.adjustStreamVolume(
+            AudioManager.STREAM_MUSIC,
+            AudioManager.ADJUST_LOWER,
+            AudioManager.FLAG_SHOW_UI
+        )
+
+    def mute(self):
+        self.audio_manager.adjustStreamVolume(
+            AudioManager.STREAM_MUSIC,
+            AudioManager.ADJUST_TOGGLE_MUTE,
+            AudioManager.FLAG_SHOW_UI
+        )
+
+
+# ===== Custom rounded button =====
+class RoundedButton(Button):
+    def __init__(self, bg_color=(0.2, 0.5, 0.9, 1), **kwargs):
+        super().__init__(**kwargs)
+        self.background_normal = ''
+        self.background_down = ''
+        self.background_color = (0, 0, 0, 0)
+        self.bg_color = bg_color
+        self.border_radius = dp(20)
+        with self.canvas.before:
+            self.color_inst = Color(*bg_color)
+            self.rect = RoundedRectangle(
+                pos=self.pos, size=self.size, radius=[self.border_radius]
+            )
+        self.bind(pos=self._update_rect, size=self._update_rect)
+
+    def _update_rect(self, *args):
+        self.rect.pos = self.pos
+        self.rect.size = self.size
+
+    def on_press(self):
+        self.color_inst.rgba = (
+            self.bg_color[0] * 0.7,
+            self.bg_color[1] * 0.7,
+            self.bg_color[2] * 0.7,
+            self.bg_color[3]
+        )
+
+    def on_release(self):
+        self.color_inst.rgba = self.bg_color
+
+
+class MusicRemoteApp(App):
+    def build(self):
+        self.title = "BT Music Remote"
+        Window.clearcolor = (0.08, 0.09, 0.12, 1)   # dark background
+
+        self.media = MediaController()
+
+        root = BoxLayout(orientation='vertical', padding=dp(20), spacing=dp(15))
+
+        # ===== Title =====
+        title = Label(
+            text="[b]BLUETOOTH MUSIC REMOTE[/b]",
+            markup=True,
+            font_size='20sp',
+            color=(1, 1, 1, 1),
+            size_hint_y=0.1
+        )
+        root.add_widget(title)
+
+        # ===== Status =====
+        self.status = Label(
+            text="Ready - Control your music",
+            font_size='14sp',
+            color=(0.6, 0.8, 1, 1),
+            size_hint_y=0.08
+        )
+        root.add_widget(self.status)
+
+        # ===== Volume row =====
+        vol_row = BoxLayout(size_hint_y=0.15, spacing=dp(10))
+
+        btn_vol_down = RoundedButton(
+            text="VOL -",
+            font_size='20sp',
+            bg_color=(0.85, 0.3, 0.3, 1)
+        )
+        btn_vol_down.bind(on_release=lambda x: self.media.volume_down())
+        vol_row.add_widget(btn_vol_down)
+
+        btn_mute = RoundedButton(
+            text="MUTE",
+            font_size='18sp',
+            bg_color=(0.5, 0.5, 0.5, 1)
+        )
+        btn_mute.bind(on_release=lambda x: self.media.mute())
+        vol_row.add_widget(btn_mute)
+
+        btn_vol_up = RoundedButton(
+            text="VOL +",
+            font_size='20sp',
+            bg_color=(0.3, 0.75, 0.4, 1)
+        )
+        btn_vol_up.bind(on_release=lambda x: self.media.volume_up())
+        vol_row.add_widget(btn_vol_up)
+
+        root.add_widget(vol_row)
+
+        # ===== Main controls grid =====
+        # Row 1: PREV | PLAY/PAUSE | NEXT
+        main_row = BoxLayout(size_hint_y=0.4, spacing=dp(15))
+
+        btn_prev = RoundedButton(
+            text="PREV",
+            font_size='22sp',
+            bg_color=(0.25, 0.5, 0.85, 1)
+        )
+        btn_prev.bind(on_release=lambda x: self._action("PREVIOUS", self.media.prev_track))
+        main_row.add_widget(btn_prev)
+
+        btn_play = RoundedButton(
+            text="PLAY\nPAUSE",
+            font_size='26sp',
+            bg_color=(0.15, 0.65, 0.9, 1)
+        )
+        btn_play.bind(on_release=lambda x: self._action("PLAY/PAUSE", self.media.play_pause))
+        main_row.add_widget(btn_play)
+
+        btn_next = RoundedButton(
+            text="NEXT",
+            font_size='22sp',
+            bg_color=(0.25, 0.5, 0.85, 1)
+        )
+        btn_next.bind(on_release=lambda x: self._action("NEXT", self.media.next_track))
+        main_row.add_widget(btn_next)
+
+        root.add_widget(main_row)
+
+        # ===== Bottom row: STOP / Info =====
+        bottom_row = BoxLayout(size_hint_y=0.15, spacing=dp(10))
+
+        btn_stop = RoundedButton(
+            text="STOP",
+            font_size='18sp',
+            bg_color=(0.8, 0.25, 0.25, 1)
+        )
+        btn_stop.bind(on_release=lambda x: self._action("STOP", self.media.stop))
+        bottom_row.add_widget(btn_stop)
+
+        root.add_widget(bottom_row)
+
+        # ===== Info =====
+        info = Label(
+            text="Make sure your phone is connected to the Bluetooth speaker\n"
+                 "and a music player is running.",
+            font_size='12sp',
+            color=(0.7, 0.7, 0.7, 1),
+            size_hint_y=0.12
+        )
+        root.add_widget(info)
+
+        return root
+
+    def _action(self, name, func):
+        try:
+            func()
+            self.status.text = f"Sent: {name}"
+        except Exception as e:
+            self.status.text = f"Error: {e}"
+
+
+if __name__ == "__main__":
+    MusicRemoteApp().run()
